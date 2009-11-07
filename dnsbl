@@ -43,6 +43,17 @@ def get_domainid(instance, domain):
             return i['DOMAINID']
     return None
 
+def find_entry(instance, domain, domainid, hostname):
+    # finds an entry in the dnsbl, returns a list if it's there
+    fqdn = reverse_ip(hostname) + '.' + domain
+    outlist = []
+
+    for i in instance.domain_resource_list(domainid=domainid):
+        if (i['NAME'] == fqdn) or ((i['NAME'] + '.' + domain) == fqdn):
+            outlist.append(i)
+
+    return outlist
+
 def add_entry(instance, domain, hostname, ipflag, comment='Blacklisted'):
     # adds an entry to the dnsbl
     fqdn = reverse_ip(hostname) + '.' + domain
@@ -52,25 +63,27 @@ def add_entry(instance, domain, hostname, ipflag, comment='Blacklisted'):
     if not domainid:
         raise Exception("Domain does not exist, or is not master: " + domain)
 
-    print 'Adding to domainid %i:' % domainid
-    print '--> %s IN A %s' % (fqdn, ip)
-    response = instance.domain_resource_create(domainid=domainid,
-                                               type='A',
-                                               name=fqdn,
-                                               target=ip,
-                                              )
-    check = instance.domain_resource_list(domainid=domainid,
-                                          resourceid=response['ResourceID'])
-    print '<-- %s IN %s %s' % (check[0]['NAME'], check[0]['TYPE'], check[0]['TARGET'])
-    print '--> %s IN TXT "%s"' % (fqdn, txt)
-    response = instance.domain_resource_create(domainid=domainid,
-                                               type='TXT',
-                                               name=fqdn,
-                                               target=txt,
-                                              )
-    check = instance.domain_resource_list(domainid=domainid,
-                                          resourceid=response['ResourceID'])
-    print '<-- %s IN %s %s' % (check[0]['NAME'], check[0]['TYPE'], check[0]['TARGET'])
+    if len(find_entry(instance, domain, domainid, hostname)) > 0:
+        print "Duplicate?!  Not adding!"
+    else:
+        print 'Adding to domainid %i:' % domainid
+        print '--> %s IN A %s' % (fqdn, ip)
+        response = instance.domain_resource_create(domainid=domainid,
+                                                   type='A',
+                                                   name=fqdn,
+                                                   target=ip,
+                                                  )
+        print '--> %s IN TXT "%s"' % (fqdn, txt)
+        response = instance.domain_resource_create(domainid=domainid,
+                                                   type='TXT',
+                                                   name=fqdn,
+                                                   target=txt,
+                                                  )
+
+    results = find_entry(instance, domain, domainid, hostname)
+    if len(results) > 0:
+        for i in results:
+            print '<-- %s IN %s %s # ResourceID %i' % (i['NAME'], i['TYPE'], i['TARGET'], i['RESOURCEID'])
 
 def del_entry(instance, domain, hostname):
     # removes an entry from the dnsbl
@@ -80,11 +93,10 @@ def del_entry(instance, domain, hostname):
         raise Exception("Domain does not exist, or is not master: " + domain)
 
     print 'Nuking %s in domainid %i:' % (fqdn, domainid)
-    for i in instance.domain_resource_list(domainid=domainid):
-        if (i['NAME'] == fqdn) or ((i['NAME'] + '.' + domain) == fqdn):
-            print 'ResourceID %i (%s IN %s %s)' % (i['RESOURCEID'], i['NAME'], i['TYPE'], i['TARGET'])
-            instance.domain_resource_delete(domainid=domainid,
-                                            resourceid=i['RESOURCEID'])
+    for i in find_entry(instance, domain, domainid, hostname):
+        print 'ResourceID %i (%s IN %s %s)' % (i['RESOURCEID'], i['NAME'], i['TYPE'], i['TARGET'])
+        instance.domain_resource_delete(domainid=domainid,
+                                        resourceid=i['RESOURCEID'])
 
 def main():
     parser = optparse.OptionParser()
