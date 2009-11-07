@@ -1,0 +1,159 @@
+#!/usr/bin/python
+
+# Adds/removes entries from a dnsbl hosted on a linode.com DNS zone.
+
+# Recent api.py available from http://www.linode.com/api/autodoc.cfm
+
+# Ryan Tucker <rtucker@gmail.com>, 2009/11/07
+
+import optparse
+import socket
+import sys
+import time
+
+from operator import itemgetter
+
+sys.path.insert(0,'api')
+import api
+del sys.path[0]
+
+def reverse_ip(ip):
+    # determines if it's an IPv4 address; if so, reverses it.
+    try:
+        socket.inet_aton(ip)
+        # it's probably a valid ipv4 address
+        parts = ip.split(".")
+        if len(parts) == 4:
+            # it's almost certainly a valid ipv4 address
+            parts.reverse()
+            return '.'.join(parts)
+        else:
+            # your guess is as good as mine
+            raise Exception('Invalid address: ' + ip)
+    except socket.error:
+        # not a legal ipv4 address; return as-is
+        return ip
+
+def get_domainid(instance, domain):
+    # looks through the list of zones associated with this apikey and finds
+    # one that matches us.  returns its domain id or None
+    domainlist = instance.domain_list()
+    for i in domainlist:
+        if i['DOMAIN'] == domain and i['TYPE'] == 'master':
+            return i['DOMAINID']
+    return None
+
+def add_entry(instance, domain, hostname, ipflag, comment='Blacklisted'):
+    # adds an entry to the dnsbl
+    fqdn = reverse_ip(hostname) + '.' + domain
+    ip = '127.0.0.' + str(ipflag)
+    txt = time.strftime('%Y%m%d %H%M %Z') + ': ' + comment
+    domainid = get_domainid(instance, domain)
+    if not domainid:
+        raise Exception("Domain does not exist, or is not master: " + domain)
+
+    print 'Adding to domainid %i:' % domainid
+    print '--> %s IN A %s' % (fqdn, ip)
+    response = instance.domain_resource_create(domainid=domainid,
+                                               type='A',
+                                               name=fqdn,
+                                               target=ip,
+                                              )
+    check = instance.domain_resource_list(domainid=domainid,
+                                          resourceid=response['ResourceID'])
+    print '<-- %s IN %s %s' % (check[0]['NAME'], check[0]['TYPE'], check[0]['TARGET'])
+    print '--> %s IN TXT "%s"' % (fqdn, txt)
+    response = instance.domain_resource_create(domainid=domainid,
+                                               type='TXT',
+                                               name=fqdn,
+                                               target=txt,
+                                              )
+    check = instance.domain_resource_list(domainid=domainid,
+                                          resourceid=response['ResourceID'])
+    print '<-- %s IN %s %s' % (check[0]['NAME'], check[0]['TYPE'], check[0]['TARGET'])
+
+def del_entry(instance, domain, hostname):
+    # removes an entry from the dnsbl
+    fqdn = reverse_ip(hostname) + '.' + domain
+    domainid = get_domainid(instance, domain)
+    if not domainid:
+        raise Exception("Domain does not exist, or is not master: " + domain)
+
+    print 'Nuking %s in domainid %i:' % (fqdn, domainid)
+    for i in instance.domain_resource_list(domainid=domainid):
+        if (i['NAME'] == fqdn) or ((i['NAME'] + '.' + domain) == fqdn):
+            print 'ResourceID %i (%s IN %s %s)' % (i['RESOURCEID'], i['NAME'], i['TYPE'], i['TARGET'])
+            instance.domain_resource_delete(domainid=domainid,
+                                            resourceid=i['RESOURCEID'])
+
+def main():
+    parser = optparse.OptionParser()
+    parser.add_option("-K", "--api-key", dest="apikey",
+        help="Specify the API key.",
+        default=False)
+    parser.add_option("-U", "--username", dest="username",
+        help="With --password, specifies the Linode creds instead of API key.",
+        default=False)
+    parser.add_option("-P", "--password", dest="password",
+        help="With --username, specifies the Linode creds instead of API key.",
+        default=False)
+    parser.add_option("-B", "--blacklist", dest="blacklist",
+        help="Specify the blacklist zone (e.g. dnsbl.foovax.com).",
+        default=False)
+    parser.add_option("-a", "--add", dest="addip",
+        help="Add the given IP/URI to the zone.",
+        default=False)
+    parser.add_option("-d", "--delete", dest="delip",
+        help="Delete the given IP/URI from the zone.",
+        default=False)
+    parser.add_option("-c", "--comment", dest="info",
+        help="Specify a comment for the addition.",
+        default=False)
+    parser.add_option("-i", "--ip-flag", dest="ipflag",
+        help="Specify the last digit of 127.0.0.x (default: 2)",
+        default=2)
+    parser.add_option("-s", "--stats", dest="stats",
+        help="See some stats about the blacklist.",
+        default=False)
+
+    (options, args) = parser.parse_args()
+
+    try:
+        import secrets
+    except:
+        secrets = False
+
+    if not options.apikey:
+        if options.username and options.password:
+            instance = api.Api()
+            instance.user_getapikey(username=options.username,
+                                    password=options.password)
+        if secrets:
+            instance = api.Api(key=secrets.API_KEY)
+        else:
+            parser.error("Need either secrets.py, --api-key, or --username and --password")
+    else:
+        instance = api.Api(key=options.apikey)
+
+    if not options.blacklist:
+        if secrets:
+            blacklist = secrets.BLACKLIST
+        else:
+            parser.error("Need either secrets.py or --blacklist option")
+    else:
+        blacklist = options.blacklist
+
+    if options.addip:
+        add_entry(instance, blacklist, options.addip, options.ipflag, options.info)
+    elif options.delip:
+        del_entry(instance, blacklist, options.delip)
+    elif options.stats:
+        # print some stats
+        parser.error('Not implemented yet...')
+    else:
+        # do something else
+        pass
+
+if __name__ == "__main__":
+    main()
+
