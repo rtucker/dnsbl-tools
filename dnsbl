@@ -49,7 +49,8 @@ def find_entry(instance, domain, domainid, hostname):
     outlist = []
 
     for i in instance.domain_resource_list(domainid=domainid):
-        if (i['NAME'] == fqdn) or ((i['NAME'] + '.' + domain) == fqdn):
+        rrhost = str(i['NAME'])
+        if (rrhost is fqdn) or ((rrhost + '.' + domain) is fqdn):
             outlist.append(i)
 
     return outlist
